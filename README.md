@@ -2,19 +2,21 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Class Circle
 
-This contains everything you need to run your app locally.
+Mobile class-circle app with React + Express + SQLite backend.
 
-View your app in AI Studio: https://ai.studio/apps/24c69b0c-e582-4b82-a8d7-e68158a52a46
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+## Run locally
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Copy `.env.example` to `.env.local` and configure Cloudinary variables.
+3. Start the app:
    `npm run dev`
+
+## API
+
+- `GET /api/posts`
+- `POST /api/posts`
+- `POST /api/posts/:id/like`
+- `POST /api/uploads/signature` (Cloudinary signed upload)

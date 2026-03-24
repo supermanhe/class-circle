@@ -22,12 +22,27 @@ interface ArchiveItem {
   index: number;
 }
 
+interface ComposerImage {
+  file: File;
+  previewUrl: string;
+}
+
+interface UploadSignatureResponse {
+  timestamp: number;
+  signature: string;
+  apiKey: string;
+  cloudName: string;
+  folder: string;
+}
+
+const MAX_IMAGES_PER_POST = 9;
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<Post[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [newContent, setNewContent] = useState('');
-  const [newImages, setNewImages] = useState<string[]>([]);
+  const [newImages, setNewImages] = useState<ComposerImage[]>([]);
   const [newDate, setNewDate] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -36,6 +51,7 @@ export default function App() {
   const [showArchive, setShowArchive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const composerImagesRef = useRef<ComposerImage[]>([]);
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pinchStartDistRef = useRef<number | null>(null);
@@ -49,6 +65,16 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    composerImagesRef.current = newImages;
+  }, [newImages]);
+
+  useEffect(() => {
+    return () => {
+      composerImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    };
+  }, []);
+
   const fetchPosts = async () => {
     try {
       const response = await fetch('/api/posts');
@@ -59,43 +85,117 @@ export default function App() {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    Array.from(files).forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setNewImages(prev => [...prev, reader.result as string]);
-      };
-      reader.readAsDataURL(file);
+  const fetchUploadSignature = async (): Promise<UploadSignatureResponse> => {
+    const response = await fetch('/api/uploads/signature', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: 'class-circle/posts' }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to create upload signature');
+    }
+
+    return response.json();
+  };
+
+  const uploadImageToCloudinary = async (
+    image: ComposerImage,
+    signatureData: UploadSignatureResponse,
+  ): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', image.file);
+    formData.append('api_key', signatureData.apiKey);
+    formData.append('timestamp', String(signatureData.timestamp));
+    formData.append('signature', signatureData.signature);
+    formData.append('folder', signatureData.folder);
+
+    const uploadEndpoint = `https://api.cloudinary.com/v1_1/${signatureData.cloudName}/image/upload`;
+    const response = await fetch(uploadEndpoint, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(body || 'Failed to upload image to Cloudinary');
+    }
+
+    const result = await response.json();
+    if (typeof result.secure_url !== 'string' || result.secure_url.length === 0) {
+      throw new Error('Cloudinary upload response is missing secure_url');
+    }
+
+    return result.secure_url;
+  };
+
+  const resetComposer = () => {
+    setNewContent('');
+    setNewImages((previous) => {
+      previous.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      return [];
+    });
+    setNewDate(() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     });
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const selectedFiles: File[] = Array.from(files);
+    const remainingSlots = Math.max(MAX_IMAGES_PER_POST - newImages.length, 0);
+    const acceptedFiles = selectedFiles.slice(0, remainingSlots);
+
+    if (acceptedFiles.length > 0) {
+      const appendedImages = acceptedFiles.map((file: File) => ({
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setNewImages((prev) => [...prev, ...appendedImages]);
+    }
+
+    e.target.value = '';
+  };
+
   const handleSubmit = async () => {
-    if (!newContent && newImages.length === 0) return;
+    const trimmedContent = newContent.trim();
+    if (!trimmedContent && newImages.length === 0) return;
+
     setIsSubmitting(true);
     try {
+      let uploadedImageUrls: string[] = [];
+      if (newImages.length > 0) {
+        const signatureData = await fetchUploadSignature();
+        uploadedImageUrls = await Promise.all(
+          newImages.map((image) => uploadImageToCloudinary(image, signatureData)),
+        );
+      }
+
       const response = await fetch('/api/posts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          content: newContent, 
-          images: newImages,
-          timestamp: new Date(newDate).toISOString()
+        body: JSON.stringify({
+          content: trimmedContent,
+          images: uploadedImageUrls,
+          timestamp: new Date(newDate).toISOString(),
         }),
       });
-      if (response.ok) {
-        setNewContent('');
-        setNewImages([]);
-        setNewDate(() => {
-          const now = new Date();
-          return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        });
-        setShowUpload(false);
-        fetchPosts();
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to create post');
       }
+
+      resetComposer();
+      setShowUpload(false);
+      fetchPosts();
     } catch (error) {
       console.error('Failed to create post:', error);
+      alert('发布失败，请稍后重试。');
     } finally {
       setIsSubmitting(false);
     }
@@ -383,9 +483,15 @@ export default function App() {
               <div className="grid grid-cols-3 gap-3">
                 {newImages.map((img, idx) => (
                   <div key={idx} className="relative aspect-square bg-zinc-900 rounded-xl overflow-hidden group">
-                    <img src={img} alt="Preview" className="w-full h-full object-cover" />
+                    <img src={img.previewUrl} alt="Preview" className="w-full h-full object-cover" />
                     <button 
-                      onClick={() => setNewImages(prev => prev.filter((_, i) => i !== idx))}
+                      onClick={() => setNewImages(prev => {
+                        const target = prev[idx];
+                        if (target) {
+                          URL.revokeObjectURL(target.previewUrl);
+                        }
+                        return prev.filter((_, i) => i !== idx);
+                      })}
                       className="absolute top-2 right-2 bg-black/60 rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <X className="w-3 h-3 text-white" />
@@ -393,7 +499,7 @@ export default function App() {
                   </div>
                 ))}
                 
-                {newImages.length < 9 && (
+                {newImages.length < MAX_IMAGES_PER_POST && (
                   <button 
                     onClick={() => fileInputRef.current?.click()}
                     className="aspect-square bg-zinc-900 border-2 border-dashed border-white/5 rounded-xl flex flex-col items-center justify-center text-white/20 hover:bg-zinc-800 transition-colors"
