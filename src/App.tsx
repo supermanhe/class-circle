@@ -86,15 +86,18 @@ type PostImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> & {
   src: string;
 };
 
-function PostImage({ src, onError, ...rest }: PostImageProps) {
+function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps) {
   const srcCandidates = useMemo(() => buildImageCandidates(src), [src]);
   const [srcIndex, setSrcIndex] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     setSrcIndex(0);
+    setIsLoaded(false);
   }, [srcCandidates]);
 
   const handleError: React.ReactEventHandler<HTMLImageElement> = (event) => {
+    setIsLoaded(false);
     if (srcIndex < srcCandidates.length - 1) {
       setSrcIndex((prev) => Math.min(prev + 1, srcCandidates.length - 1));
       return;
@@ -105,7 +108,31 @@ function PostImage({ src, onError, ...rest }: PostImageProps) {
     }
   };
 
-  return <img {...rest} src={srcCandidates[srcIndex]} onError={handleError} />;
+  const handleLoad: React.ReactEventHandler<HTMLImageElement> = (event) => {
+    setIsLoaded(true);
+    if (onLoad) {
+      onLoad(event);
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full overflow-hidden bg-zinc-900">
+      {!isLoaded && (
+        <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-zinc-800 via-zinc-700/60 to-zinc-800">
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="h-6 w-6 border-2 border-emerald-500/60 border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>
+      )}
+      <img
+        {...rest}
+        src={srcCandidates[srcIndex]}
+        onError={handleError}
+        onLoad={handleLoad}
+        className={`${className ?? ''} transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`.trim()}
+      />
+    </div>
+  );
 }
 
 export default function App() {
