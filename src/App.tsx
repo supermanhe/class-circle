@@ -41,6 +41,7 @@ const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
 const DEFAULT_IMAGE_TRANSFORMS = ['f_auto,q_auto', 'f_jpg,q_auto'] as const;
 const FEED_IMAGE_TRANSFORMS = ['f_auto,q_auto,w_1080,c_limit', 'f_jpg,q_auto,w_1080,c_limit'] as const;
+const LAUNCH_IMAGE_URL = 'https://res.cloudinary.com/dnhjgceru/image/upload/v1774429625/6c61a1bb24c7f60276a30af9c28946c2_1_icvldb.jpg';
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -491,17 +492,39 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center z-50">
+      <div className="fixed inset-0 bg-black z-50 overflow-hidden">
         <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: 'easeOut' }}
+          className="flex h-full flex-col"
         >
-          <div className="text-white text-4xl font-black mb-4 tracking-tighter italic">
-            CLASS<span className="text-emerald-500">CIRCLE</span>
+          <div className="relative h-[44vh] min-h-[280px] w-full overflow-hidden">
+            <img
+              src={LAUNCH_IMAGE_URL}
+              alt="长岭居小学三（3）班合照"
+              className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-black/15 via-black/10 to-black/80" />
+            <div className="absolute inset-x-0 bottom-0 px-6 pb-6">
+              <p className="text-[11px] font-semibold tracking-[0.35em] text-white/70">CLASS MEMORY</p>
+            </div>
           </div>
-          <div className="h-1 w-12 bg-emerald-500 mx-auto rounded-full" />
-          <h1 className="text-white/60 mt-8 text-sm tracking-widest uppercase">长岭居小学3（3）班级圈</h1>
+          <div className="flex flex-1 flex-col justify-between px-6 pb-10 pt-8">
+            <div>
+              <h1 className="text-3xl font-black tracking-tight text-white">长岭居小学三（3）班级圈</h1>
+              <p className="mt-3 text-sm leading-6 text-white/60">
+                记录日常瞬间，整理班级回忆。
+              </p>
+            </div>
+            <div>
+              <div className="h-1 w-14 rounded-full bg-emerald-500" />
+              <p className="mt-4 text-[11px] uppercase tracking-[0.32em] text-white/40">
+                Loading Class Circle
+              </p>
+            </div>
+          </div>
         </motion.div>
       </div>
     );
