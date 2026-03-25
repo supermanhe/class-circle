@@ -39,8 +39,6 @@ const MAX_IMAGES_PER_POST = 9;
 const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
 const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
-const LOADING_COVER_IMAGE_URL = '/loading-cover.jpg';
-const IMAGE_RETRY_DELAYS_MS = [800, 1200, 1600];
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -59,29 +57,24 @@ const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): str
   }
 };
 
-const addCacheBustingParam = (sourceUrl: string, value = '1'): string => {
+const addCacheBustingParam = (sourceUrl: string): string => {
   try {
     const parsedUrl = new URL(sourceUrl);
-    parsedUrl.searchParams.set('__wxfb', value);
+    parsedUrl.searchParams.set('__wxfb', '1');
     return parsedUrl.toString();
   } catch {
     return sourceUrl;
   }
 };
 
-const buildImageCandidates = (sourceUrl: string, retryAttempt: number): string[] => {
+const buildImageCandidates = (sourceUrl: string): string[] => {
   const autoFormatUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_auto,q_auto');
   const fallbackJpegUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_jpg,q_auto');
-  const retryToken = retryAttempt > 0 ? `retry-${retryAttempt}` : null;
-  const withRetryToken = (url: string | null): string | null => {
-    if (!url) return null;
-    return retryToken ? addCacheBustingParam(url, retryToken) : url;
-  };
 
   const orderedCandidates = [
-    withRetryToken(autoFormatUrl),
-    retryToken ? withRetryToken(fallbackJpegUrl) : (fallbackJpegUrl ? addCacheBustingParam(fallbackJpegUrl) : null),
-    withRetryToken(sourceUrl),
+    autoFormatUrl,
+    fallbackJpegUrl ? addCacheBustingParam(fallbackJpegUrl) : null,
+    sourceUrl,
   ];
 
   return orderedCandidates.filter((item, index): item is string => {
@@ -94,46 +87,19 @@ type PostImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> & {
 };
 
 function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps) {
-  const [retryAttempt, setRetryAttempt] = useState(0);
+  const srcCandidates = useMemo(() => buildImageCandidates(src), [src]);
   const [srcIndex, setSrcIndex] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
-  const retryTimeoutRef = useRef<number | null>(null);
-  const srcCandidates = useMemo(() => buildImageCandidates(src, retryAttempt), [src, retryAttempt]);
-
-  const clearRetryTimeout = () => {
-    if (retryTimeoutRef.current !== null) {
-      window.clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
-  };
 
   useEffect(() => {
-    clearRetryTimeout();
-    setRetryAttempt(0);
     setSrcIndex(0);
     setIsLoaded(false);
-  }, [src]);
-
-  useEffect(() => {
-    return () => {
-      clearRetryTimeout();
-    };
-  }, []);
+  }, [srcCandidates]);
 
   const handleError: React.ReactEventHandler<HTMLImageElement> = (event) => {
     setIsLoaded(false);
     if (srcIndex < srcCandidates.length - 1) {
       setSrcIndex((prev) => Math.min(prev + 1, srcCandidates.length - 1));
-      return;
-    }
-
-    if (retryAttempt < IMAGE_RETRY_DELAYS_MS.length) {
-      clearRetryTimeout();
-      const nextRetryAttempt = retryAttempt + 1;
-      retryTimeoutRef.current = window.setTimeout(() => {
-        setRetryAttempt(nextRetryAttempt);
-        setSrcIndex(0);
-      }, IMAGE_RETRY_DELAYS_MS[retryAttempt]);
       return;
     }
 
@@ -143,7 +109,6 @@ function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps)
   };
 
   const handleLoad: React.ReactEventHandler<HTMLImageElement> = (event) => {
-    clearRetryTimeout();
     setIsLoaded(true);
     if (onLoad) {
       onLoad(event);
@@ -173,7 +138,6 @@ function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps)
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [currentPostIndex, setCurrentPostIndex] = useState(0);
   const [showUpload, setShowUpload] = useState(false);
   const [newContent, setNewContent] = useState('');
   const [newImages, setNewImages] = useState<ComposerImage[]>([]);
@@ -402,33 +366,12 @@ export default function App() {
     return `${date.getMonth() + 1}月${date.getDate()}日`;
   };
 
-  const updateVisiblePostIndex = () => {
-    const container = scrollContainerRef.current;
-    if (!container || posts.length === 0) return;
-
-    const viewportHeight = container.clientHeight;
-    if (viewportHeight <= 0) return;
-
-    const nextIndex = Math.min(
-      Math.max(Math.round(container.scrollTop / viewportHeight), 0),
-      posts.length - 1,
-    );
-
-    setCurrentPostIndex((prev) => (prev === nextIndex ? prev : nextIndex));
-  };
-
-  useEffect(() => {
-    updateVisiblePostIndex();
-  }, [posts.length]);
-
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
-
-    updateVisiblePostIndex();
-
+    
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
-      updateVisiblePostIndex();
+      // Scroll ended
     }, 1500);
   };
 
@@ -538,22 +481,17 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 z-50 overflow-hidden">
-        <div
-          className="absolute inset-0 bg-zinc-950 bg-cover bg-center"
-          style={{ backgroundImage: `url("${LOADING_COVER_IMAGE_URL}")` }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/50 to-black/75" />
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center z-50">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="relative z-10 h-full w-full flex flex-col items-center justify-center text-center px-6"
+          className="text-center"
         >
-          <div className="text-white text-4xl font-black mb-4 tracking-tighter italic drop-shadow-[0_4px_20px_rgba(0,0,0,0.75)]">
+          <div className="text-white text-4xl font-black mb-4 tracking-tighter italic">
             CLASS<span className="text-emerald-500">CIRCLE</span>
           </div>
-          <div className="h-1 w-14 bg-emerald-500 mx-auto rounded-full shadow-[0_0_20px_rgba(16,185,129,0.5)]" />
-          <h1 className="text-white/80 mt-8 text-sm tracking-widest uppercase">长岭居小学三（3）班级圈</h1>
+          <div className="h-1 w-12 bg-emerald-500 mx-auto rounded-full" />
+          <h1 className="text-white/60 mt-8 text-sm tracking-widest uppercase">长岭居小学3（3）班级圈</h1>
         </motion.div>
       </div>
     );
@@ -587,7 +525,6 @@ export default function App() {
               {/* Full Screen Images */}
               <div className="absolute inset-0 bg-zinc-900">
                 {post.images && post.images.length > 0 ? (
-                  Math.abs(idx - currentPostIndex) <= 1 ? (
                   <div className={`h-full w-full grid ${
                     post.images.length === 1 ? 'grid-cols-1' : 
                     post.images.length === 2 ? 'grid-rows-2' : 
@@ -604,9 +541,6 @@ export default function App() {
                       />
                     ))}
                   </div>
-                  ) : (
-                    <div className="h-full w-full bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-900" />
-                  )
                 ) : (
                   <div className="h-full w-full flex items-center justify-center bg-zinc-800">
                     <ImageIcon className="text-white/10 w-24 h-24" />
