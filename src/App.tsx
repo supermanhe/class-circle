@@ -173,6 +173,7 @@ function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps)
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [currentPostIndex, setCurrentPostIndex] = useState(0);
   const [showUpload, setShowUpload] = useState(false);
   const [newContent, setNewContent] = useState('');
   const [newImages, setNewImages] = useState<ComposerImage[]>([]);
@@ -401,12 +402,33 @@ export default function App() {
     return `${date.getMonth() + 1}月${date.getDate()}日`;
   };
 
+  const updateVisiblePostIndex = () => {
+    const container = scrollContainerRef.current;
+    if (!container || posts.length === 0) return;
+
+    const viewportHeight = container.clientHeight;
+    if (viewportHeight <= 0) return;
+
+    const nextIndex = Math.min(
+      Math.max(Math.round(container.scrollTop / viewportHeight), 0),
+      posts.length - 1,
+    );
+
+    setCurrentPostIndex((prev) => (prev === nextIndex ? prev : nextIndex));
+  };
+
+  useEffect(() => {
+    updateVisiblePostIndex();
+  }, [posts.length]);
+
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
-    
+
+    updateVisiblePostIndex();
+
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
-      // Scroll ended
+      updateVisiblePostIndex();
     }, 1500);
   };
 
@@ -565,6 +587,7 @@ export default function App() {
               {/* Full Screen Images */}
               <div className="absolute inset-0 bg-zinc-900">
                 {post.images && post.images.length > 0 ? (
+                  Math.abs(idx - currentPostIndex) <= 1 ? (
                   <div className={`h-full w-full grid ${
                     post.images.length === 1 ? 'grid-cols-1' : 
                     post.images.length === 2 ? 'grid-rows-2' : 
@@ -581,6 +604,9 @@ export default function App() {
                       />
                     ))}
                   </div>
+                  ) : (
+                    <div className="h-full w-full bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-900" />
+                  )
                 ) : (
                   <div className="h-full w-full flex items-center justify-center bg-zinc-800">
                     <ImageIcon className="text-white/10 w-24 h-24" />
