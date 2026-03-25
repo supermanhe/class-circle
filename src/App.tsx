@@ -39,6 +39,7 @@ const MAX_IMAGES_PER_POST = 9;
 const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
 const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
+const LOADING_COVER_IMAGE_URL = '/loading-cover.jpg';
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -481,17 +482,22 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center z-50">
+      <div className="fixed inset-0 z-50 overflow-hidden">
+        <div
+          className="absolute inset-0 bg-zinc-950 bg-cover bg-center"
+          style={{ backgroundImage: `url("${LOADING_COVER_IMAGE_URL}")` }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/50 to-black/75" />
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="text-center"
+          className="relative z-10 h-full w-full flex flex-col items-center justify-center text-center px-6"
         >
-          <div className="text-white text-4xl font-black mb-4 tracking-tighter italic">
+          <div className="text-white text-4xl font-black mb-4 tracking-tighter italic drop-shadow-[0_4px_20px_rgba(0,0,0,0.75)]">
             CLASS<span className="text-emerald-500">CIRCLE</span>
           </div>
-          <div className="h-1 w-12 bg-emerald-500 mx-auto rounded-full" />
-          <h1 className="text-white/60 mt-8 text-sm tracking-widest uppercase">长岭居小学3（3）班级圈</h1>
+          <div className="h-1 w-14 bg-emerald-500 mx-auto rounded-full shadow-[0_0_20px_rgba(16,185,129,0.5)]" />
+          <h1 className="text-white/80 mt-8 text-sm tracking-widest uppercase">长岭居小学三（3）班级圈</h1>
         </motion.div>
       </div>
     );
