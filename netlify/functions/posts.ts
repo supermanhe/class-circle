@@ -2,6 +2,7 @@ import type { Handler } from "@netlify/functions";
 import { json } from "./_lib/http";
 import { normalizePostImages, normalizeContent, normalizeImages, normalizeTimestamp, validatePostInput } from "./_lib/posts";
 import { getSupabaseAdmin } from "./_lib/supabase";
+import { requireAdminPassword } from "./_lib/admin-auth";
 
 interface PostRow {
   id: number;
@@ -51,6 +52,11 @@ export const handler: Handler = async (event) => {
   }
 
   if (event.httpMethod === "POST") {
+    const authError = requireAdminPassword(event);
+    if (authError) {
+      return authError;
+    }
+
     const payload = parseRequestBody(event.body ?? null);
     if (payload === null) {
       return json(400, { error: "Invalid JSON body" });

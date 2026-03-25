@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Camera, Image as ImageIcon, X, Clock, Share2, Plus, Calendar, Heart, History, ChevronLeft } from 'lucide-react';
+import { Camera, Image as ImageIcon, X, Clock, Share2, Plus, Calendar, Heart, History, ChevronLeft, Trash2 } from 'lucide-react';
 
 interface Post {
   id: number;
@@ -36,6 +36,8 @@ interface UploadSignatureResponse {
 }
 
 const MAX_IMAGES_PER_POST = 9;
+const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
+const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -49,9 +51,12 @@ export default function App() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [isDeletingPostId, setIsDeletingPostId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerImagesRef = useRef<ComposerImage[]>([]);
+  const adminPasswordRef = useRef('');
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pinchStartDistRef = useRef<number | null>(null);
@@ -75,6 +80,14 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const cachedPassword = window.sessionStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY)?.trim();
+    if (cachedPassword) {
+      adminPasswordRef.current = cachedPassword;
+      setIsAdminUnlocked(true);
+    }
+  }, []);
+
   const fetchPosts = async () => {
     try {
       const response = await fetch('/api/posts');
@@ -85,16 +98,57 @@ export default function App() {
     }
   };
 
-  const fetchUploadSignature = async (): Promise<UploadSignatureResponse> => {
+  const clearAdminPassword = () => {
+    adminPasswordRef.current = '';
+    setIsAdminUnlocked(false);
+    window.sessionStorage.removeItem(ADMIN_PASSWORD_STORAGE_KEY);
+  };
+
+  const ensureAdminPassword = (): string | null => {
+    if (adminPasswordRef.current) {
+      return adminPasswordRef.current;
+    }
+
+    const input = window.prompt('请输入管理员口令');
+    const password = input?.trim();
+    if (!password) {
+      return null;
+    }
+
+    adminPasswordRef.current = password;
+    setIsAdminUnlocked(true);
+    window.sessionStorage.setItem(ADMIN_PASSWORD_STORAGE_KEY, password);
+    return password;
+  };
+
+  const parseErrorMessage = async (response: Response, fallbackMessage: string): Promise<string> => {
+    const body = await response.json().catch(() => null);
+    if (body && typeof body === 'object') {
+      const maybeError = (body as { error?: unknown }).error;
+      if (typeof maybeError === 'string') {
+        return maybeError;
+      }
+    }
+    return fallbackMessage;
+  };
+
+  const fetchUploadSignature = async (adminPassword: string): Promise<UploadSignatureResponse> => {
     const response = await fetch('/api/uploads/signature', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        [ADMIN_PASSWORD_HEADER]: adminPassword,
+      },
       body: JSON.stringify({ folder: 'class-circle/posts' }),
     });
 
     if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to create upload signature');
+      const errorMessage = await parseErrorMessage(response, 'Failed to create upload signature');
+      if (response.status === 401 || response.status === 403) {
+        clearAdminPassword();
+        throw new Error('管理员口令错误，请重新输入。');
+      }
+      throw new Error(errorMessage);
     }
 
     return response.json();
@@ -165,11 +219,14 @@ export default function App() {
     const trimmedContent = newContent.trim();
     if (!trimmedContent && newImages.length === 0) return;
 
+    const adminPassword = ensureAdminPassword();
+    if (!adminPassword) return;
+
     setIsSubmitting(true);
     try {
       let uploadedImageUrls: string[] = [];
       if (newImages.length > 0) {
-        const signatureData = await fetchUploadSignature();
+        const signatureData = await fetchUploadSignature(adminPassword);
         uploadedImageUrls = await Promise.all(
           newImages.map((image) => uploadImageToCloudinary(image, signatureData)),
         );
@@ -177,7 +234,10 @@ export default function App() {
 
       const response = await fetch('/api/posts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          [ADMIN_PASSWORD_HEADER]: adminPassword,
+        },
         body: JSON.stringify({
           content: trimmedContent,
           images: uploadedImageUrls,
@@ -186,8 +246,12 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to create post');
+        const errorMessage = await parseErrorMessage(response, 'Failed to create post');
+        if (response.status === 401 || response.status === 403) {
+          clearAdminPassword();
+          throw new Error('管理员口令错误，请重新输入。');
+        }
+        throw new Error(errorMessage);
       }
 
       resetComposer();
@@ -195,7 +259,7 @@ export default function App() {
       fetchPosts();
     } catch (error) {
       console.error('Failed to create post:', error);
-      alert('发布失败，请稍后重试。');
+      alert(error instanceof Error ? error.message : '发布失败，请稍后重试。');
     } finally {
       setIsSubmitting(false);
     }
@@ -231,6 +295,46 @@ export default function App() {
       }
     } catch (error) {
       console.error('Failed to like post:', error);
+    }
+  };
+
+  const handleOpenUpload = () => {
+    const adminPassword = ensureAdminPassword();
+    if (!adminPassword) return;
+    setShowUpload(true);
+  };
+
+  const handleDeletePost = async (postId: number) => {
+    const adminPassword = ensureAdminPassword();
+    if (!adminPassword) return;
+
+    const confirmed = window.confirm('确认删除这条动态吗？删除后不可恢复。');
+    if (!confirmed) return;
+
+    setIsDeletingPostId(postId);
+    try {
+      const response = await fetch(`/api/posts/${postId}`, {
+        method: 'DELETE',
+        headers: {
+          [ADMIN_PASSWORD_HEADER]: adminPassword,
+        },
+      });
+
+      if (!response.ok) {
+        const errorMessage = await parseErrorMessage(response, 'Failed to delete post');
+        if (response.status === 401 || response.status === 403) {
+          clearAdminPassword();
+          throw new Error('管理员口令错误，请重新输入。');
+        }
+        throw new Error(errorMessage);
+      }
+
+      setPosts((prev) => prev.filter((post) => post.id !== postId));
+    } catch (error) {
+      console.error('Failed to delete post:', error);
+      alert(error instanceof Error ? error.message : '删除失败，请稍后重试。');
+    } finally {
+      setIsDeletingPostId(null);
     }
   };
 
@@ -391,6 +495,19 @@ export default function App() {
                     {post.likes || 0}
                   </span>
                 </div>
+
+                {isAdminUnlocked && (
+                  <div className="absolute top-24 right-8">
+                    <button
+                      onClick={() => handleDeletePost(post.id)}
+                      disabled={isDeletingPostId === post.id}
+                      className="p-3 bg-black/30 backdrop-blur-xl rounded-full text-white/80 hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      title="删除动态"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))
@@ -404,7 +521,7 @@ export default function App() {
         </div>
         <div className="flex items-center space-x-3 pointer-events-auto">
           <button 
-            onClick={() => setShowUpload(true)}
+            onClick={handleOpenUpload}
             className="p-3 bg-black/20 backdrop-blur-xl rounded-full text-white active:scale-90 transition-transform"
             title="发布动态"
           >

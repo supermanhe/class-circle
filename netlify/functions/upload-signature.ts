@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type { Handler } from "@netlify/functions";
 import { json } from "./_lib/http";
+import { requireAdminPassword } from "./_lib/admin-auth";
 
 interface SignaturePayload {
   timestamp: number;
@@ -55,6 +56,11 @@ const buildSignature = (folder: string): SignaturePayload => {
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return json(405, { error: "Method not allowed" });
+  }
+
+  const authError = requireAdminPassword(event);
+  if (authError) {
+    return authError;
   }
 
   const body = parseRequestBody(event.body ?? null);

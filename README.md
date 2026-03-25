@@ -23,9 +23,10 @@ Run SQL from:
 ## API
 
 - `GET /api/posts`
-- `POST /api/posts`
+- `POST /api/posts` (requires `x-admin-password`)
+- `DELETE /api/posts/:id` (requires `x-admin-password`)
 - `POST /api/posts/:id/like`
-- `POST /api/uploads/signature` (Cloudinary signed upload)
+- `POST /api/uploads/signature` (Cloudinary signed upload, requires `x-admin-password`)
 
 ## Deploy to Netlify
 
@@ -38,6 +39,7 @@ Run SQL from:
    - `CLOUDINARY_API_KEY`
    - `CLOUDINARY_API_SECRET`
    - `CLOUDINARY_FOLDER` (optional)
+   - `ADMIN_WRITE_PASSWORD`
 4. Deploy. `netlify.toml` already configures:
    - build command: `npm run build`
    - publish dir: `dist`
