@@ -40,6 +40,7 @@ const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
 const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
 const LOADING_COVER_IMAGE_URL = '/loading-cover.jpg';
+const IMAGE_RETRY_DELAYS_MS = [800, 1200, 1600];
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -58,24 +59,29 @@ const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): str
   }
 };
 
-const addCacheBustingParam = (sourceUrl: string): string => {
+const addCacheBustingParam = (sourceUrl: string, value = '1'): string => {
   try {
     const parsedUrl = new URL(sourceUrl);
-    parsedUrl.searchParams.set('__wxfb', '1');
+    parsedUrl.searchParams.set('__wxfb', value);
     return parsedUrl.toString();
   } catch {
     return sourceUrl;
   }
 };
 
-const buildImageCandidates = (sourceUrl: string): string[] => {
+const buildImageCandidates = (sourceUrl: string, retryAttempt: number): string[] => {
   const autoFormatUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_auto,q_auto');
   const fallbackJpegUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_jpg,q_auto');
+  const retryToken = retryAttempt > 0 ? `retry-${retryAttempt}` : null;
+  const withRetryToken = (url: string | null): string | null => {
+    if (!url) return null;
+    return retryToken ? addCacheBustingParam(url, retryToken) : url;
+  };
 
   const orderedCandidates = [
-    autoFormatUrl,
-    fallbackJpegUrl ? addCacheBustingParam(fallbackJpegUrl) : null,
-    sourceUrl,
+    withRetryToken(autoFormatUrl),
+    retryToken ? withRetryToken(fallbackJpegUrl) : (fallbackJpegUrl ? addCacheBustingParam(fallbackJpegUrl) : null),
+    withRetryToken(sourceUrl),
   ];
 
   return orderedCandidates.filter((item, index): item is string => {
@@ -88,19 +94,46 @@ type PostImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> & {
 };
 
 function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps) {
-  const srcCandidates = useMemo(() => buildImageCandidates(src), [src]);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [srcIndex, setSrcIndex] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
+  const retryTimeoutRef = useRef<number | null>(null);
+  const srcCandidates = useMemo(() => buildImageCandidates(src, retryAttempt), [src, retryAttempt]);
+
+  const clearRetryTimeout = () => {
+    if (retryTimeoutRef.current !== null) {
+      window.clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  };
 
   useEffect(() => {
+    clearRetryTimeout();
+    setRetryAttempt(0);
     setSrcIndex(0);
     setIsLoaded(false);
-  }, [srcCandidates]);
+  }, [src]);
+
+  useEffect(() => {
+    return () => {
+      clearRetryTimeout();
+    };
+  }, []);
 
   const handleError: React.ReactEventHandler<HTMLImageElement> = (event) => {
     setIsLoaded(false);
     if (srcIndex < srcCandidates.length - 1) {
       setSrcIndex((prev) => Math.min(prev + 1, srcCandidates.length - 1));
+      return;
+    }
+
+    if (retryAttempt < IMAGE_RETRY_DELAYS_MS.length) {
+      clearRetryTimeout();
+      const nextRetryAttempt = retryAttempt + 1;
+      retryTimeoutRef.current = window.setTimeout(() => {
+        setRetryAttempt(nextRetryAttempt);
+        setSrcIndex(0);
+      }, IMAGE_RETRY_DELAYS_MS[retryAttempt]);
       return;
     }
 
@@ -110,6 +143,7 @@ function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps)
   };
 
   const handleLoad: React.ReactEventHandler<HTMLImageElement> = (event) => {
+    clearRetryTimeout();
     setIsLoaded(true);
     if (onLoad) {
       onLoad(event);
