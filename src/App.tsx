@@ -38,6 +38,75 @@ interface UploadSignatureResponse {
 const MAX_IMAGES_PER_POST = 9;
 const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
 const ADMIN_PASSWORD_HEADER = 'x-admin-password';
+const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
+
+const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
+  try {
+    const parsedUrl = new URL(sourceUrl);
+    if (!parsedUrl.hostname.endsWith('cloudinary.com')) return null;
+
+    const markerIndex = parsedUrl.pathname.indexOf(CLOUDINARY_UPLOAD_SEGMENT);
+    if (markerIndex === -1) return null;
+
+    const prefix = parsedUrl.pathname.slice(0, markerIndex + CLOUDINARY_UPLOAD_SEGMENT.length);
+    const suffix = parsedUrl.pathname.slice(markerIndex + CLOUDINARY_UPLOAD_SEGMENT.length).replace(/^\/+/, '');
+    parsedUrl.pathname = `${prefix}${transforms}/${suffix}`;
+    return parsedUrl.toString();
+  } catch {
+    return null;
+  }
+};
+
+const addCacheBustingParam = (sourceUrl: string): string => {
+  try {
+    const parsedUrl = new URL(sourceUrl);
+    parsedUrl.searchParams.set('__wxfb', '1');
+    return parsedUrl.toString();
+  } catch {
+    return sourceUrl;
+  }
+};
+
+const buildImageCandidates = (sourceUrl: string): string[] => {
+  const autoFormatUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_auto,q_auto');
+  const fallbackJpegUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_jpg,q_auto');
+
+  const orderedCandidates = [
+    autoFormatUrl,
+    fallbackJpegUrl ? addCacheBustingParam(fallbackJpegUrl) : null,
+    sourceUrl,
+  ];
+
+  return orderedCandidates.filter((item, index): item is string => {
+    return typeof item === 'string' && item.length > 0 && orderedCandidates.indexOf(item) === index;
+  });
+};
+
+type PostImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> & {
+  src: string;
+};
+
+function PostImage({ src, onError, ...rest }: PostImageProps) {
+  const srcCandidates = useMemo(() => buildImageCandidates(src), [src]);
+  const [srcIndex, setSrcIndex] = useState(0);
+
+  useEffect(() => {
+    setSrcIndex(0);
+  }, [srcCandidates]);
+
+  const handleError: React.ReactEventHandler<HTMLImageElement> = (event) => {
+    if (srcIndex < srcCandidates.length - 1) {
+      setSrcIndex((prev) => Math.min(prev + 1, srcCandidates.length - 1));
+      return;
+    }
+
+    if (onError) {
+      onError(event);
+    }
+  };
+
+  return <img {...rest} src={srcCandidates[srcIndex]} onError={handleError} />;
+}
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -436,7 +505,7 @@ export default function App() {
                     'grid-cols-2 grid-rows-2'
                   }`}>
                     {post.images.slice(0, 4).map((img, i) => (
-                      <img 
+                      <PostImage 
                         key={i} 
                         src={img} 
                         className="w-full h-full object-cover" 
@@ -778,11 +847,12 @@ function ArchiveView({ posts, onClose, onItemClick }: {
                       onClick={() => onItemClick(item.postId)}
                       className={`${getGridSpan(idx)} relative rounded-2xl overflow-hidden bg-zinc-900 group cursor-pointer`}
                     >
-                      <img 
+                      <PostImage 
                         src={item.imageUrl} 
                         alt="Archive" 
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                         loading="lazy"
+                        referrerPolicy="no-referrer"
                       />
                       <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors" />
                     </motion.div>
