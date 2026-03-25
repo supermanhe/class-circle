@@ -39,6 +39,8 @@ const MAX_IMAGES_PER_POST = 9;
 const ADMIN_PASSWORD_STORAGE_KEY = 'class-circle-admin-password';
 const ADMIN_PASSWORD_HEADER = 'x-admin-password';
 const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
+const DEFAULT_IMAGE_TRANSFORMS = ['f_auto,q_auto', 'f_jpg,q_auto'] as const;
+const FEED_IMAGE_TRANSFORMS = ['f_auto,q_auto,w_1080,c_limit', 'f_jpg,q_auto,w_1080,c_limit'] as const;
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -67,9 +69,13 @@ const addCacheBustingParam = (sourceUrl: string): string => {
   }
 };
 
-const buildImageCandidates = (sourceUrl: string): string[] => {
-  const autoFormatUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_auto,q_auto');
-  const fallbackJpegUrl = getCloudinaryTransformedUrl(sourceUrl, 'f_jpg,q_auto');
+const buildImageCandidates = (
+  sourceUrl: string,
+  transforms: readonly [string, string] = DEFAULT_IMAGE_TRANSFORMS,
+): string[] => {
+  const [primaryTransforms, fallbackTransforms] = transforms;
+  const autoFormatUrl = getCloudinaryTransformedUrl(sourceUrl, primaryTransforms);
+  const fallbackJpegUrl = getCloudinaryTransformedUrl(sourceUrl, fallbackTransforms);
 
   const orderedCandidates = [
     autoFormatUrl,
@@ -84,10 +90,14 @@ const buildImageCandidates = (sourceUrl: string): string[] => {
 
 type PostImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> & {
   src: string;
+  transformMode?: 'default' | 'feed';
 };
 
-function PostImage({ src, onError, onLoad, className, ...rest }: PostImageProps) {
-  const srcCandidates = useMemo(() => buildImageCandidates(src), [src]);
+function PostImage({ src, onError, onLoad, className, transformMode = 'default', ...rest }: PostImageProps) {
+  const srcCandidates = useMemo(() => {
+    const transforms = transformMode === 'feed' ? FEED_IMAGE_TRANSFORMS : DEFAULT_IMAGE_TRANSFORMS;
+    return buildImageCandidates(src, transforms);
+  }, [src, transformMode]);
   const [srcIndex, setSrcIndex] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
 
@@ -537,6 +547,8 @@ export default function App() {
                         src={img} 
                         className="w-full h-full object-cover" 
                         alt="Post"
+                        transformMode="feed"
+                        loading="lazy"
                         referrerPolicy="no-referrer"
                       />
                     ))}
