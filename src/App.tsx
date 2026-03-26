@@ -20,6 +20,7 @@ interface ArchiveItem {
   imageUrl: string;
   timestamp: string;
   index: number;
+  likes: number;
 }
 
 interface ComposerImage {
@@ -166,7 +167,8 @@ export default function App() {
   const adminPasswordRef = useRef('');
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pinchStartDistRef = useRef<number | null>(null);
+  const homeSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const homeSwipeAxisRef = useRef<'horizontal' | 'vertical' | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 2000);
@@ -461,33 +463,46 @@ export default function App() {
     }
   };
 
+  const resetHomeSwipe = () => {
+    homeSwipeStartRef.current = null;
+    homeSwipeAxisRef.current = null;
+  };
+
   const handleHomeTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].pageX - e.touches[1].pageX,
-        e.touches[0].pageY - e.touches[1].pageY
-      );
-      pinchStartDistRef.current = dist;
+    if (e.touches.length !== 1 || showArchive || showUpload) {
+      resetHomeSwipe();
+      return;
     }
+
+    const touch = e.touches[0];
+    homeSwipeStartRef.current = { x: touch.pageX, y: touch.pageY };
+    homeSwipeAxisRef.current = null;
   };
 
   const handleHomeTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
-      const currentDist = Math.hypot(
-        e.touches[0].pageX - e.touches[1].pageX,
-        e.touches[0].pageY - e.touches[1].pageY
-      );
-      
-      // If current distance is significantly smaller than start distance (pinch in)
-      if (pinchStartDistRef.current - currentDist > 100) {
-        setShowArchive(true);
-        pinchStartDistRef.current = null; // Reset to prevent multiple triggers
-      }
+    if (e.touches.length !== 1 || !homeSwipeStartRef.current || showArchive || showUpload) {
+      return;
+    }
+
+    const touch = e.touches[0];
+    const deltaX = touch.pageX - homeSwipeStartRef.current.x;
+    const deltaY = touch.pageY - homeSwipeStartRef.current.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    if (!homeSwipeAxisRef.current) {
+      if (absX < 12 && absY < 12) return;
+      homeSwipeAxisRef.current = absX > absY ? 'horizontal' : 'vertical';
+    }
+
+    if (homeSwipeAxisRef.current === 'horizontal' && deltaX <= -70 && absX > absY) {
+      setShowArchive(true);
+      resetHomeSwipe();
     }
   };
 
   const handleHomeTouchEnd = () => {
-    pinchStartDistRef.current = null;
+    resetHomeSwipe();
   };
 
   if (loading) {
@@ -536,6 +551,7 @@ export default function App() {
       onTouchStart={handleHomeTouchStart}
       onTouchMove={handleHomeTouchMove}
       onTouchEnd={handleHomeTouchEnd}
+      onTouchCancel={handleHomeTouchEnd}
     >
       {/* Main Feed */}
       <div 
@@ -795,6 +811,9 @@ function ArchiveView({ posts, onClose, onItemClick }: {
 }) {
   const [visibleItems, setVisibleItems] = useState(12);
   const loaderRef = useRef<HTMLDivElement>(null);
+  const archiveRef = useRef<HTMLDivElement>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipeAxisRef = useRef<'horizontal' | 'vertical' | null>(null);
 
   // Flatten images with metadata
   const allImages = useMemo(() => {
@@ -805,7 +824,8 @@ function ArchiveView({ posts, onClose, onItemClick }: {
           postId: post.id,
           imageUrl: img,
           timestamp: post.timestamp,
-          index: idx
+          index: idx,
+          likes: post.likes ?? 0,
         });
       });
     });
@@ -844,6 +864,73 @@ function ArchiveView({ posts, onClose, onItemClick }: {
     return () => observer.disconnect();
   }, [allImages.length]);
 
+  useEffect(() => {
+    const container = archiveRef.current;
+    if (!container) return;
+
+    const preventPinchZoom = (event: Event) => {
+      const touchEvent = event as TouchEvent;
+      if ('touches' in touchEvent && touchEvent.touches.length < 2) return;
+      event.preventDefault();
+    };
+
+    container.addEventListener('touchstart', preventPinchZoom, { passive: false });
+    container.addEventListener('touchmove', preventPinchZoom, { passive: false });
+    container.addEventListener('gesturestart', preventPinchZoom, { passive: false });
+    container.addEventListener('gesturechange', preventPinchZoom, { passive: false });
+    container.addEventListener('gestureend', preventPinchZoom, { passive: false });
+
+    return () => {
+      container.removeEventListener('touchstart', preventPinchZoom);
+      container.removeEventListener('touchmove', preventPinchZoom);
+      container.removeEventListener('gesturestart', preventPinchZoom);
+      container.removeEventListener('gesturechange', preventPinchZoom);
+      container.removeEventListener('gestureend', preventPinchZoom);
+    };
+  }, []);
+
+  const resetArchiveSwipe = () => {
+    swipeStartRef.current = null;
+    swipeAxisRef.current = null;
+  };
+
+  const handleArchiveTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) {
+      resetArchiveSwipe();
+      return;
+    }
+
+    const touch = e.touches[0];
+    swipeStartRef.current = { x: touch.pageX, y: touch.pageY };
+    swipeAxisRef.current = null;
+  };
+
+  const handleArchiveTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1 || !swipeStartRef.current) {
+      return;
+    }
+
+    const touch = e.touches[0];
+    const deltaX = touch.pageX - swipeStartRef.current.x;
+    const deltaY = touch.pageY - swipeStartRef.current.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    if (!swipeAxisRef.current) {
+      if (absX < 12 && absY < 12) return;
+      swipeAxisRef.current = absX > absY ? 'horizontal' : 'vertical';
+    }
+
+    if (swipeAxisRef.current === 'horizontal' && deltaX >= 70 && absX > absY) {
+      onClose();
+      resetArchiveSwipe();
+    }
+  };
+
+  const handleArchiveTouchEnd = () => {
+    resetArchiveSwipe();
+  };
+
   // Helper to determine grid span based on index
   const getGridSpan = (idx: number) => {
     // Pattern: 1st is large, next 4 are small, 6th is medium, etc.
@@ -864,6 +951,11 @@ function ArchiveView({ posts, onClose, onItemClick }: {
         stiffness: 200,
         opacity: { duration: 0.4, ease: "easeInOut" }
       }}
+      ref={archiveRef}
+      onTouchStart={handleArchiveTouchStart}
+      onTouchMove={handleArchiveTouchMove}
+      onTouchEnd={handleArchiveTouchEnd}
+      onTouchCancel={handleArchiveTouchEnd}
       className="fixed inset-0 bg-[#121212] z-[60] flex flex-col overflow-hidden"
     >
       {/* Header */}
@@ -917,6 +1009,10 @@ function ArchiveView({ posts, onClose, onItemClick }: {
                         referrerPolicy="no-referrer"
                       />
                       <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors" />
+                      <div className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-1 text-xs font-semibold text-white/90 backdrop-blur-md">
+                        <Heart className="h-3.5 w-3.5 fill-red-500 text-red-500" />
+                        <span className="tabular-nums">{item.likes}</span>
+                      </div>
                     </motion.div>
                   ))}
                 </div>
