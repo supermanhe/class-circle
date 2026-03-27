@@ -43,6 +43,13 @@ const CLOUDINARY_UPLOAD_SEGMENT = '/image/upload/';
 const DEFAULT_IMAGE_TRANSFORMS = ['f_auto,q_auto', 'f_jpg,q_auto'] as const;
 const FEED_IMAGE_TRANSFORMS = ['f_auto,q_auto,w_1080,c_limit', 'f_jpg,q_auto,w_1080,c_limit'] as const;
 const LAUNCH_IMAGE_URL = 'https://res.cloudinary.com/dnhjgceru/image/upload/v1774429625/6c61a1bb24c7f60276a30af9c28946c2_1_icvldb.jpg';
+const LIKE_COOLDOWN_MS = 3000;
+const LIKE_FEEDBACK_DURATION_MS = 800;
+
+interface LikeBurst {
+  id: number;
+  postId: number;
+}
 
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
@@ -150,6 +157,7 @@ function PostImage({ src, onError, onLoad, className, transformMode = 'default',
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [likeBursts, setLikeBursts] = useState<LikeBurst[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [newContent, setNewContent] = useState('');
   const [newImages, setNewImages] = useState<ComposerImage[]>([]);
@@ -165,6 +173,9 @@ export default function App() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerImagesRef = useRef<ComposerImage[]>([]);
   const adminPasswordRef = useRef('');
+  const likeBurstIdRef = useRef(0);
+  const likeCooldownUntilRef = useRef<Record<number, number>>({});
+  const likeBurstTimeoutsRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const homeSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -186,6 +197,12 @@ export default function App() {
   useEffect(() => {
     return () => {
       composerImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      Object.values(likeBurstTimeoutsRef.current).forEach((timeoutId: ReturnType<typeof setTimeout>) => clearTimeout(timeoutId));
     };
   }, []);
 
@@ -393,15 +410,40 @@ export default function App() {
     alert('链接已复制，可以分享到家长群啦！');
   };
 
+  const triggerLikeFeedback = (postId: number) => {
+    const burstId = likeBurstIdRef.current + 1;
+    likeBurstIdRef.current = burstId;
+
+    setLikeBursts((prev) => [...prev, { id: burstId, postId }]);
+
+    likeBurstTimeoutsRef.current[burstId] = setTimeout(() => {
+      setLikeBursts((prev) => prev.filter((burst) => burst.id !== burstId));
+      delete likeBurstTimeoutsRef.current[burstId];
+    }, LIKE_FEEDBACK_DURATION_MS);
+  };
+
   const handleLike = async (postId: number) => {
+    triggerLikeFeedback(postId);
+
+    const now = Date.now();
+    const cooldownUntil = likeCooldownUntilRef.current[postId] ?? 0;
+    if (now < cooldownUntil) {
+      return;
+    }
+
+    likeCooldownUntilRef.current[postId] = now + LIKE_COOLDOWN_MS;
+
     try {
       const response = await fetch(`/api/posts/${postId}/like`, { method: 'POST' });
       if (response.ok) {
         const data = await response.json();
-        setPosts(prev => prev.map(post => 
+        setPosts((prev) => prev.map((post) =>
           post.id === postId ? { ...post, likes: data.likes } : post
         ));
+        return;
       }
+
+      console.error('Failed to like post:', response.status);
     } catch (error) {
       console.error('Failed to like post:', error);
     }
@@ -616,9 +658,11 @@ export default function App() {
                   <div className="relative">
                     <AnimatePresence>
                       {/* Floating hearts effect */}
-                      {posts.find(p => p.id === post.id)?.likes !== undefined && (
+                      {likeBursts
+                        .filter((burst) => burst.postId === post.id)
+                        .map((burst) => (
                         <motion.div
-                          key={`like-effect-${post.id}-${post.likes}`}
+                          key={burst.id}
                           initial={{ opacity: 1, y: 0, scale: 0.5 }}
                           animate={{ opacity: 0, y: -100, scale: 2, rotate: Math.random() * 40 - 20 }}
                           exit={{ opacity: 0 }}
@@ -627,7 +671,7 @@ export default function App() {
                         >
                           <Heart className="w-8 h-8 fill-red-500 text-red-500" />
                         </motion.div>
-                      )}
+                      ))}
                     </AnimatePresence>
                     
                     <motion.button
