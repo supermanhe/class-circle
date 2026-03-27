@@ -182,6 +182,7 @@ export default function App() {
   const [isDeletingPostId, setIsDeletingPostId] = useState<number | null>(null);
   const [adminPasswordDraft, setAdminPasswordDraft] = useState('');
   const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [isAdminPasswordChecking, setIsAdminPasswordChecking] = useState(false);
   const [showAdminPasswordDialog, setShowAdminPasswordDialog] = useState(false);
   const [deleteConfirmPostId, setDeleteConfirmPostId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -267,6 +268,20 @@ export default function App() {
     window.sessionStorage.removeItem(ADMIN_PASSWORD_STORAGE_KEY);
   };
 
+  const validateAdminPassword = async (password: string): Promise<void> => {
+    const response = await fetch('/api/admin/verify', {
+      method: 'POST',
+      headers: {
+        [ADMIN_PASSWORD_HEADER]: password,
+      },
+    });
+
+    if (!response.ok) {
+      const errorMessage = await parseErrorMessage(response, '管理员口令校验失败，请稍后重试。');
+      throw buildStatusError(errorMessage, response.status);
+    }
+  };
+
   const saveAdminPassword = (password: string) => {
     adminPasswordRef.current = password;
     setIsAdminUnlocked(true);
@@ -311,10 +326,20 @@ export default function App() {
     setShowAdminPasswordDialog(true);
   };
 
-  const requestAdminPassword = (action: AdminAction) => {
+  const requestAdminPassword = async (action: AdminAction) => {
     const cachedPassword = adminPasswordRef.current.trim();
     if (cachedPassword) {
-      action(cachedPassword);
+      try {
+        await validateAdminPassword(cachedPassword);
+        action(cachedPassword);
+      } catch (error) {
+        if (isAuthError(error)) {
+          handleAdminAuthFailure(action);
+          return;
+        }
+
+        showToast(error instanceof Error ? error.message : '管理员口令校验失败，请稍后重试。', 'error');
+      }
       return;
     }
 
@@ -327,26 +352,40 @@ export default function App() {
   };
 
   const closeAdminPasswordDialog = () => {
+    if (isAdminPasswordChecking) return;
     pendingAdminActionRef.current = null;
     setAdminPasswordDraft('');
     setAdminPasswordError('');
     setShowAdminPasswordDialog(false);
   };
 
-  const handleAdminPasswordSubmit = () => {
+  const handleAdminPasswordSubmit = async () => {
     const password = adminPasswordDraft.trim();
     if (!password) {
       setAdminPasswordError('请输入管理员口令。');
       return;
     }
 
-    saveAdminPassword(password);
-    const pendingAction = pendingAdminActionRef.current;
-    pendingAdminActionRef.current = null;
-    setAdminPasswordDraft('');
-    setAdminPasswordError('');
-    setShowAdminPasswordDialog(false);
-    pendingAction?.(password);
+    setIsAdminPasswordChecking(true);
+    try {
+      await validateAdminPassword(password);
+      saveAdminPassword(password);
+      const pendingAction = pendingAdminActionRef.current;
+      pendingAdminActionRef.current = null;
+      setAdminPasswordDraft('');
+      setAdminPasswordError('');
+      setShowAdminPasswordDialog(false);
+      pendingAction?.(password);
+    } catch (error) {
+      if (isAuthError(error)) {
+        setAdminPasswordError('管理员口令错误，请重新输入。');
+        return;
+      }
+
+      setAdminPasswordError(error instanceof Error ? error.message : '管理员口令校验失败，请稍后重试。');
+    } finally {
+      setIsAdminPasswordChecking(false);
+    }
   };
 
   const parseErrorMessage = async (response: Response, fallbackMessage: string): Promise<string> => {
@@ -1002,12 +1041,13 @@ export default function App() {
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      handleAdminPasswordSubmit();
+                    if (event.key === 'Enter' && !isAdminPasswordChecking) {
+                      void handleAdminPasswordSubmit();
                     }
                   }}
+                  disabled={isAdminPasswordChecking}
                   placeholder="请输入管理员口令"
-                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400/60 focus:bg-white/8"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400/60 focus:bg-white/8 disabled:cursor-not-allowed disabled:opacity-60"
                 />
                 {adminPasswordError && (
                   <p className="text-sm text-rose-300">{adminPasswordError}</p>
@@ -1016,15 +1056,19 @@ export default function App() {
               <div className="flex gap-3">
                 <button
                   onClick={closeAdminPasswordDialog}
-                  className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/8"
+                  disabled={isAdminPasswordChecking}
+                  className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/8 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   取消
                 </button>
                 <button
-                  onClick={handleAdminPasswordSubmit}
-                  className="flex-1 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-emerald-400"
+                  onClick={() => {
+                    void handleAdminPasswordSubmit();
+                  }}
+                  disabled={isAdminPasswordChecking}
+                  className="flex-1 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  确认
+                  {isAdminPasswordChecking ? '校验中...' : '确认'}
                 </button>
               </div>
             </div>
