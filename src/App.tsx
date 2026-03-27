@@ -51,6 +51,16 @@ interface LikeBurst {
   postId: number;
 }
 
+type ToastTone = 'success' | 'error' | 'info';
+
+interface ToastItem {
+  id: number;
+  tone: ToastTone;
+  message: string;
+}
+
+type AdminAction = (password: string) => void;
+
 const getCloudinaryTransformedUrl = (sourceUrl: string, transforms: string): string | null => {
   try {
     const parsedUrl = new URL(sourceUrl);
@@ -158,6 +168,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<Post[]>([]);
   const [likeBursts, setLikeBursts] = useState<LikeBurst[]>([]);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [newContent, setNewContent] = useState('');
   const [newImages, setNewImages] = useState<ComposerImage[]>([]);
@@ -169,13 +180,22 @@ export default function App() {
   const [showArchive, setShowArchive] = useState(false);
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
   const [isDeletingPostId, setIsDeletingPostId] = useState<number | null>(null);
+  const [adminPasswordDraft, setAdminPasswordDraft] = useState('');
+  const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [showAdminPasswordDialog, setShowAdminPasswordDialog] = useState(false);
+  const [deleteConfirmPostId, setDeleteConfirmPostId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerImagesRef = useRef<ComposerImage[]>([]);
   const adminPasswordRef = useRef('');
+  const adminPasswordInputRef = useRef<HTMLInputElement>(null);
+  const pendingAdminActionRef = useRef<AdminAction | null>(null);
   const likeBurstIdRef = useRef(0);
   const likeCooldownUntilRef = useRef<Record<number, number>>({});
   const likeBurstTimeoutsRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const toastIdRef = useRef(0);
+  const toastItemsRef = useRef<ToastItem[]>([]);
+  const toastTimeoutsRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const homeSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -195,6 +215,10 @@ export default function App() {
   }, [newImages]);
 
   useEffect(() => {
+    toastItemsRef.current = toasts;
+  }, [toasts]);
+
+  useEffect(() => {
     return () => {
       composerImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
     };
@@ -203,6 +227,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       Object.values(likeBurstTimeoutsRef.current).forEach((timeoutId: ReturnType<typeof setTimeout>) => clearTimeout(timeoutId));
+      Object.values(toastTimeoutsRef.current).forEach((timeoutId: ReturnType<typeof setTimeout>) => clearTimeout(timeoutId));
     };
   }, []);
 
@@ -214,6 +239,17 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!showAdminPasswordDialog) return;
+
+    const timeoutId = setTimeout(() => {
+      adminPasswordInputRef.current?.focus();
+      adminPasswordInputRef.current?.select();
+    }, 20);
+
+    return () => clearTimeout(timeoutId);
+  }, [showAdminPasswordDialog]);
+
   const fetchPosts = async () => {
     try {
       const response = await fetch('/api/posts');
@@ -221,6 +257,7 @@ export default function App() {
       setPosts(data);
     } catch (error) {
       console.error('Failed to fetch posts:', error);
+      showToast('加载动态失败，请稍后重试。', 'error');
     }
   };
 
@@ -230,21 +267,86 @@ export default function App() {
     window.sessionStorage.removeItem(ADMIN_PASSWORD_STORAGE_KEY);
   };
 
-  const ensureAdminPassword = (): string | null => {
-    if (adminPasswordRef.current) {
-      return adminPasswordRef.current;
-    }
-
-    const input = window.prompt('请输入管理员口令');
-    const password = input?.trim();
-    if (!password) {
-      return null;
-    }
-
+  const saveAdminPassword = (password: string) => {
     adminPasswordRef.current = password;
     setIsAdminUnlocked(true);
     window.sessionStorage.setItem(ADMIN_PASSWORD_STORAGE_KEY, password);
-    return password;
+  };
+
+  const dismissToast = (toastId: number) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== toastId));
+    const timeoutId = toastTimeoutsRef.current[toastId];
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      delete toastTimeoutsRef.current[toastId];
+    }
+  };
+
+  const scheduleToastRemoval = (toastId: number) => {
+    const existingTimeout = toastTimeoutsRef.current[toastId];
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    toastTimeoutsRef.current[toastId] = setTimeout(() => {
+      dismissToast(toastId);
+    }, 2200);
+  };
+
+  const showToast = (message: string, tone: ToastTone = 'info') => {
+    const existing = toastItemsRef.current.find((toast) => toast.message === message && toast.tone === tone);
+    const toastId = existing?.id ?? toastIdRef.current + 1;
+    if (!existing) {
+      toastIdRef.current = toastId;
+      setToasts((prev) => [...prev, { id: toastId, tone, message }]);
+    }
+
+    scheduleToastRemoval(toastId);
+  };
+
+  const openAdminPasswordDialog = (action: AdminAction, errorMessage = '') => {
+    pendingAdminActionRef.current = action;
+    setAdminPasswordDraft('');
+    setAdminPasswordError(errorMessage);
+    setShowAdminPasswordDialog(true);
+  };
+
+  const requestAdminPassword = (action: AdminAction) => {
+    const cachedPassword = adminPasswordRef.current.trim();
+    if (cachedPassword) {
+      action(cachedPassword);
+      return;
+    }
+
+    openAdminPasswordDialog(action);
+  };
+
+  const handleAdminAuthFailure = (retryAction: AdminAction) => {
+    clearAdminPassword();
+    openAdminPasswordDialog(retryAction, '管理员口令错误，请重新输入。');
+  };
+
+  const closeAdminPasswordDialog = () => {
+    pendingAdminActionRef.current = null;
+    setAdminPasswordDraft('');
+    setAdminPasswordError('');
+    setShowAdminPasswordDialog(false);
+  };
+
+  const handleAdminPasswordSubmit = () => {
+    const password = adminPasswordDraft.trim();
+    if (!password) {
+      setAdminPasswordError('请输入管理员口令。');
+      return;
+    }
+
+    saveAdminPassword(password);
+    const pendingAction = pendingAdminActionRef.current;
+    pendingAdminActionRef.current = null;
+    setAdminPasswordDraft('');
+    setAdminPasswordError('');
+    setShowAdminPasswordDialog(false);
+    pendingAction?.(password);
   };
 
   const parseErrorMessage = async (response: Response, fallbackMessage: string): Promise<string> => {
@@ -256,6 +358,19 @@ export default function App() {
       }
     }
     return fallbackMessage;
+  };
+
+  const buildStatusError = (message: string, status: number): Error & { status: number } => {
+    const error = new Error(message) as Error & { status: number };
+    error.status = status;
+    return error;
+  };
+
+  const isAuthError = (error: unknown): error is Error & { status: number } => {
+    const status = (error as { status?: unknown } | null)?.status;
+    return error instanceof Error
+      && typeof status === 'number'
+      && (status === 401 || status === 403);
   };
 
   const fetchUploadSignature = async (adminPassword: string): Promise<UploadSignatureResponse> => {
@@ -271,10 +386,9 @@ export default function App() {
     if (!response.ok) {
       const errorMessage = await parseErrorMessage(response, 'Failed to create upload signature');
       if (response.status === 401 || response.status === 403) {
-        clearAdminPassword();
-        throw new Error('管理员口令错误，请重新输入。');
+        throw buildStatusError('管理员口令错误，请重新输入。', response.status);
       }
-      throw new Error(errorMessage);
+      throw buildStatusError(errorMessage, response.status);
     }
 
     return response.json();
@@ -341,12 +455,9 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleSubmit = async () => {
+  const executeSubmit = async (adminPassword: string) => {
     const trimmedContent = newContent.trim();
     if (!trimmedContent && newImages.length === 0) return;
-
-    const adminPassword = ensureAdminPassword();
-    if (!adminPassword) return;
 
     setIsSubmitting(true);
     try {
@@ -372,23 +483,39 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const errorMessage = await parseErrorMessage(response, 'Failed to create post');
+        const errorMessage = await parseErrorMessage(response, '发布失败，请稍后重试。');
         if (response.status === 401 || response.status === 403) {
-          clearAdminPassword();
-          throw new Error('管理员口令错误，请重新输入。');
+          throw buildStatusError('管理员口令错误，请重新输入。', response.status);
         }
-        throw new Error(errorMessage);
+        throw buildStatusError(errorMessage, response.status);
       }
 
       resetComposer();
       setShowUpload(false);
-      fetchPosts();
+      showToast('发布成功。', 'success');
+      await fetchPosts();
     } catch (error) {
       console.error('Failed to create post:', error);
-      alert(error instanceof Error ? error.message : '发布失败，请稍后重试。');
+      if (isAuthError(error)) {
+        handleAdminAuthFailure((password) => {
+          void executeSubmit(password);
+        });
+        return;
+      }
+
+      showToast(error instanceof Error ? error.message : '发布失败，请稍后重试。', 'error');
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleSubmit = () => {
+    const trimmedContent = newContent.trim();
+    if (!trimmedContent && newImages.length === 0) return;
+
+    requestAdminPassword((password) => {
+      void executeSubmit(password);
+    });
   };
 
   const formatDateLabel = (dateStr: string) => {
@@ -405,9 +532,14 @@ export default function App() {
     }, 1500);
   };
 
-  const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    alert('链接已复制，可以分享到家长群啦！');
+  const handleShare = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast('链接已复制。', 'success');
+    } catch (error) {
+      console.error('Failed to copy link:', error);
+      showToast('复制失败，请稍后重试。', 'error');
+    }
   };
 
   const triggerLikeFeedback = (postId: number) => {
@@ -440,28 +572,23 @@ export default function App() {
         setPosts((prev) => prev.map((post) =>
           post.id === postId ? { ...post, likes: data.likes } : post
         ));
+        showToast('+1', 'success');
         return;
       }
 
       console.error('Failed to like post:', response.status);
+      showToast('点赞失败，请稍后重试。', 'error');
     } catch (error) {
       console.error('Failed to like post:', error);
+      showToast('点赞失败，请稍后重试。', 'error');
     }
   };
 
   const handleOpenUpload = () => {
-    const adminPassword = ensureAdminPassword();
-    if (!adminPassword) return;
     setShowUpload(true);
   };
 
-  const handleDeletePost = async (postId: number) => {
-    const adminPassword = ensureAdminPassword();
-    if (!adminPassword) return;
-
-    const confirmed = window.confirm('确认删除这条动态吗？删除后不可恢复。');
-    if (!confirmed) return;
-
+  const executeDeletePost = async (postId: number, adminPassword: string) => {
     setIsDeletingPostId(postId);
     try {
       const response = await fetch(`/api/posts/${postId}`, {
@@ -472,21 +599,42 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const errorMessage = await parseErrorMessage(response, 'Failed to delete post');
+        const errorMessage = await parseErrorMessage(response, '删除失败，请稍后重试。');
         if (response.status === 401 || response.status === 403) {
-          clearAdminPassword();
-          throw new Error('管理员口令错误，请重新输入。');
+          throw buildStatusError('管理员口令错误，请重新输入。', response.status);
         }
-        throw new Error(errorMessage);
+        throw buildStatusError(errorMessage, response.status);
       }
 
       setPosts((prev) => prev.filter((post) => post.id !== postId));
+      showToast('已删除动态。', 'success');
     } catch (error) {
       console.error('Failed to delete post:', error);
-      alert(error instanceof Error ? error.message : '删除失败，请稍后重试。');
+      if (isAuthError(error)) {
+        handleAdminAuthFailure((password) => {
+          void executeDeletePost(postId, password);
+        });
+        return;
+      }
+
+      showToast(error instanceof Error ? error.message : '删除失败，请稍后重试。', 'error');
     } finally {
       setIsDeletingPostId(null);
     }
+  };
+
+  const handleDeletePost = (postId: number) => {
+    setDeleteConfirmPostId(postId);
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteConfirmPostId === null) return;
+
+    const targetPostId = deleteConfirmPostId;
+    setDeleteConfirmPostId(null);
+    requestAdminPassword((password) => {
+      void executeDeletePost(targetPostId, password);
+    });
   };
 
   const scrollToPost = (index: number) => {
@@ -831,6 +979,87 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showAdminPasswordDialog && (
+          <DialogShell onClose={closeAdminPasswordDialog}>
+            <div className="space-y-5">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-emerald-400/80">Admin Access</p>
+                <h3 className="mt-3 text-2xl font-black tracking-tight text-white">输入管理员口令</h3>
+                <p className="mt-2 text-sm leading-6 text-white/55">输入成功后会继续刚才的操作。</p>
+              </div>
+              <div className="space-y-3">
+                <input
+                  ref={adminPasswordInputRef}
+                  type="password"
+                  value={adminPasswordDraft}
+                  onChange={(event) => {
+                    setAdminPasswordDraft(event.target.value);
+                    if (adminPasswordError) {
+                      setAdminPasswordError('');
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      handleAdminPasswordSubmit();
+                    }
+                  }}
+                  placeholder="请输入管理员口令"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400/60 focus:bg-white/8"
+                />
+                {adminPasswordError && (
+                  <p className="text-sm text-rose-300">{adminPasswordError}</p>
+                )}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={closeAdminPasswordDialog}
+                  className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/8"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleAdminPasswordSubmit}
+                  className="flex-1 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-emerald-400"
+                >
+                  确认
+                </button>
+              </div>
+            </div>
+          </DialogShell>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {deleteConfirmPostId !== null && (
+          <DialogShell onClose={() => setDeleteConfirmPostId(null)}>
+            <div className="space-y-5">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-rose-300/90">Danger Zone</p>
+                <h3 className="mt-3 text-2xl font-black tracking-tight text-white">确认删除这条动态？</h3>
+                <p className="mt-2 text-sm leading-6 text-white/55">删除后无法恢复，相关图片也会一起清理。</p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDeleteConfirmPostId(null)}
+                  className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/8"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  className="flex-1 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-bold text-white transition hover:bg-rose-400"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </DialogShell>
+        )}
+      </AnimatePresence>
+
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} />
+
       <style>{`
         .vertical-text {
           writing-mode: vertical-rl;
@@ -844,6 +1073,66 @@ export default function App() {
           scrollbar-width: none;
         }
       `}</style>
+    </div>
+  );
+}
+
+function DialogShell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/65 px-5 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 16, scale: 0.98 }}
+        transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-sm rounded-[28px] border border-white/10 bg-zinc-950/96 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {children}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ToastViewport({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (toastId: number) => void }) {
+  if (toasts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[80] flex justify-center px-4">
+      <div className="flex w-full max-w-sm flex-col gap-2">
+        <AnimatePresence initial={false}>
+          {toasts.map((toast) => {
+            const toneClassName = toast.tone === 'success'
+              ? 'border-emerald-400/30 bg-emerald-500/16 text-emerald-100'
+              : toast.tone === 'error'
+                ? 'border-rose-400/30 bg-rose-500/16 text-rose-100'
+                : 'border-white/15 bg-white/10 text-white';
+
+            return (
+              <motion.button
+                key={toast.id}
+                type="button"
+                initial={{ opacity: 0, y: 18, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.96 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+                onClick={() => onDismiss(toast.id)}
+                className={`pointer-events-auto w-full rounded-2xl border px-4 py-3 text-left text-sm font-semibold shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl ${toneClassName}`}
+              >
+                {toast.message}
+              </motion.button>
+            );
+          })}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
