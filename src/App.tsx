@@ -585,7 +585,9 @@ export default function App() {
   };
 
   const handleOpenUpload = () => {
-    setShowUpload(true);
+    requestAdminPassword(() => {
+      setShowUpload(true);
+    });
   };
 
   const executeDeletePost = async (postId: number, adminPassword: string) => {
